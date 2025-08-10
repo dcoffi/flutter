@@ -1,0 +1,12 @@
+void main() {
+ List<String> productos = [];
+  productos = ["Laptop","Teclado","Mouse"];
+  Map<String, int> stock = {
+    productos[0]:7,
+    productos[1]:6,
+    productos[2]:12
+  };
+  print("Stock");
+  print("Productos Disponibles");
+  print(stock["Teclado"]);
+}
