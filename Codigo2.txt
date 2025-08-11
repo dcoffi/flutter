@@ -1,0 +1,44 @@
+Future<void> main() async {
+ stockAvanzado();
+}
+
+void stockAvanzado(){
+  Map<String, Map<String, Map<String, dynamic>>> inventario = {
+    "Electronica":{
+      "Laptop": {
+        "Precio": 120, "Stock": 20
+        }
+    },
+    "Mobiliario":{
+      "Mesa":{
+        "Precio": 50.8, "Stock": 12
+      }
+    }
+  };
+  agregarProductos(inventario:inventario,precio:25,producto:"Mouse",stock:12,categoria:"Electronica");
+  listarProductos(inventario,"Electronica");
+}
+
+void listarProductos(Map<String, Map<String, Map<String, dynamic>>> inventario, String categoria){
+  if(!inventario.containsKey(categoria)){
+    print("Categoría $categoria no existe");
+    return;
+  }
+  var productosOrdenados = inventario[categoria]!.entries.toList();
+  print("Productos en $categoria ordenados");
+  
+  for(var prod in productosOrdenados){
+    print("🟢 ${prod.key}:${prod.value["Stock"]} unidades a un precio de ${prod.value["Precio"]}\$");
+  }
+}
+void agregarProductos({
+  required Map<String, Map<String, Map<String, dynamic>>> inventario,
+  required String categoria,
+  required String producto,
+  required double precio,
+  required int stock
+}){
+  inventario.putIfAbsent(categoria,()=>{});
+  inventario[categoria]![producto] = {"Precio":precio,"Stock":stock};
+  print("Producto $producto agregado a la $categoria");
+}
