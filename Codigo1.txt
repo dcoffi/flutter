@@ -1,4 +1,4 @@
-void main() {
+Future<void> main() async {
  List<String> productos = [];
   productos = ["Laptop","Teclado","Mouse"];
   Map<String, int> stock = {
@@ -9,4 +9,8 @@ void main() {
   print("Stock");
   print("Productos Disponibles");
   print(stock["Teclado"]);
+  
+  for(int i=0;i<stock.length;i++){
+    print("${productos[i]}:${stock[productos[i]]} unidades");
+  }
 }
