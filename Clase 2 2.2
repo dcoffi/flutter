@@ -18,7 +18,7 @@ class MyApp extends StatelessWidget {
           seedColor: const Color.fromARGB(185, 61, 239, 141),
         ),
       ),
-      home: Container(),
+      home: AppPrincipal(),
     );
   }
 }
@@ -33,8 +33,10 @@ class _AppPrincipalState extends State<AppPrincipal> {
   @override
   Widget build(BuildContext context) {
     return Scaffold(
-      appBar: AppBar(title: Text("Bienvenido")),
-      body: Center(),
+      appBar: AppBar(
+        backgroundColor: Theme.of(context).colorScheme.inversePrimary,
+        title: Text("Bienvenido")),
+      body: Center(child: Text("Hola Mundo")),
     );
   }
 }
