@@ -1,0 +1,40 @@
+import 'package:flutter/material.dart';
+
+void main() {
+  runApp(MyApp());
+}
+
+class MyApp extends StatelessWidget {
+  //Si definimos variables en esta seccion seran variables de clase
+  const MyApp({super.key});
+  @override
+  Widget build(BuildContext context) {
+    //Si definimos variables en esta seccion son variables locales
+    return MaterialApp(
+      title: 'Mi Primera App',
+      debugShowCheckedModeBanner: false,
+      theme: ThemeData(
+        colorScheme: ColorScheme.fromSeed(
+          seedColor: const Color.fromARGB(185, 61, 239, 141),
+        ),
+      ),
+      home: Container(),
+    );
+  }
+}
+
+class AppPrincipal extends StatefulWidget {
+  @override
+  State<AppPrincipal> createState() => _AppPrincipalState();
+}
+
+class _AppPrincipalState extends State<AppPrincipal> {
+  //Si definimos variables aqui, seran variables locales
+  @override
+  Widget build(BuildContext context) {
+    return Scaffold(
+      appBar: AppBar(title: Text("Bienvenido")),
+      body: Center(),
+    );
+  }
+}
