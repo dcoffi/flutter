@@ -23,11 +23,6 @@ class MyApp extends StatelessWidget {
   }
 }
 
-class AppPrincipal extends StatefulWidget {
-  @override
-  State<AppPrincipal> createState() => _AppPrincipalState();
-}
-
 Map<String, Map<String, Map<String, dynamic>>> inventario = {
   "Electronica": {
     "Laptop": {"Precio": 120, "Stock": 20},
@@ -36,6 +31,11 @@ Map<String, Map<String, Map<String, dynamic>>> inventario = {
     "Mesa": {"Precio": 50.8, "Stock": 12},
   },
 };
+
+class AppPrincipal extends StatefulWidget {
+  @override
+  State<AppPrincipal> createState() => _AppPrincipalState();
+}
 
 class _AppPrincipalState extends State<AppPrincipal> {
   //Si definimos variables aqui, seran variables locales
@@ -55,13 +55,15 @@ class _AppPrincipalState extends State<AppPrincipal> {
   }) {
     inventario.putIfAbsent(categoria, () => {});
     inventario[categoria]![producto] = {"Precio": precio, "Stock": stock};
-    setState(() {}); //Refresca la Interfaz
+
+    setState(() {}); // refresca la Interfaz
   }
 
   @override
   Widget build(BuildContext context) {
     return Scaffold(
       appBar: AppBar(
+        elevation: 3,
         backgroundColor: Theme.of(context).colorScheme.inversePrimary,
         title: Text("📦 Inventario"),
       ),
@@ -70,18 +72,21 @@ class _AppPrincipalState extends State<AppPrincipal> {
           var categorias = categoria.key;
           return ExpansionTile(
             title: Text(
-              "📂 ${categorias}",
+              "📂 $categorias",
               style: TextStyle(fontWeight: FontWeight.bold),
             ),
             children: categoria.value.entries
                 .map(
                   (prod) => ListTile(
-                    title: Text(prod.key),
+                    title: Text(
+                      prod.key,
+                      style: TextStyle(fontWeight: FontWeight.bold),
+                    ),
                     subtitle: Column(
                       crossAxisAlignment: CrossAxisAlignment.start,
                       children: [
-                        Text("Precio ${prod.value["Precio"]}\$"),
-                        Text("Stock ${prod.value["Stock"]} unidades"),
+                        Text("Precio: ${prod.value["Precio"]}\$"),
+                        Text("Stock: ${prod.value["Stock"]} unidades"),
                       ],
                     ),
                   ),
@@ -92,11 +97,14 @@ class _AppPrincipalState extends State<AppPrincipal> {
       ),
       floatingActionButton: FloatingActionButton(
         onPressed: () {
+          
           showDialog(
-            context: context,
-            builder: (context) {
-              return AgregarProducto(onAgregar: agregarProducto);
-            },
+          context: context,
+          builder: (context) {
+            return AgregarProducto(
+            onAgregar: agregarProducto,
+            );
+          }
           );
         },
         child: Icon(Icons.add, color: Colors.white),
@@ -114,7 +122,8 @@ class AgregarProducto extends StatefulWidget {
   })
   onAgregar;
 
-  const AgregarProducto({super.key, required this.onAgregar});
+  AgregarProducto({super.key, required this.onAgregar});
+
   @override
   State<AgregarProducto> createState() => _AgregarProductoState();
 }
@@ -126,6 +135,7 @@ class _AgregarProductoState extends State<AgregarProducto> {
     final TextEditingController productoField = TextEditingController();
     final TextEditingController precioField = TextEditingController();
     final TextEditingController stockField = TextEditingController();
+
     return AlertDialog(
       title: const Text("➕ Agregar Producto"),
       content: SingleChildScrollView(
@@ -141,22 +151,22 @@ class _AgregarProductoState extends State<AgregarProducto> {
             TextField(
               controller: productoField,
               decoration: InputDecoration(
-                labelText: 'Precio',
-                hintText: "Introduzca Precio",
-              ),
-            ),
-            TextField(
-              controller: precioField,
-              decoration: InputDecoration(
                 labelText: 'Producto',
                 hintText: "Introduzca Producto",
               ),
             ),
             TextField(
+              controller: precioField,
+              decoration: InputDecoration(
+                labelText: 'precio',
+                hintText: "Introduzca Precio",
+              ),
+            ),
+            TextField(
               controller: stockField,
               decoration: InputDecoration(
-                labelText: 'Stock',
-                hintText: "Introduzca el Stock",
+                labelText: 'Inventario',
+                hintText: "Introduzca cuantos hay",
               ),
             ),
           ],
@@ -164,6 +174,10 @@ class _AgregarProductoState extends State<AgregarProducto> {
       ),
       actions: [
         TextButton(
+          child: const Text("Cancelar"),
+          onPressed: () => Navigator.of(context).pop(),
+        ),
+        ElevatedButton(
           child: const Text("Agregar"),
           onPressed: () {
             final categoria = categoriaField.text.trim();
