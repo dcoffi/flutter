@@ -1,0 +1,314 @@
+import 'package:flutter/material.dart';
+import 'dart:convert';
+import 'package:http/http.dart' as http;
+
+void main() {
+  runApp(DigimonApp());
+}
+
+//MODELO
+class Digimon {
+  final int id;
+  final String name;
+  final String image;
+  final String level;
+  final String types;
+  final List<String> attrib;
+  final List<String> descrip;
+
+  Digimon({
+    required this.id,
+    required this.name,
+    required this.image,
+    required this.level,
+    required this.types,
+    required this.attrib,
+    required this.descrip,
+  });
+
+  factory Digimon.fromJson(Map<String, dynamic> json) {
+    return Digimon(
+      id: json['id'] ?? 0,
+      name: json['name'] ?? "Desconocido",
+      image: (json['images'] != null && json['images'].isNotEmpty)
+          ? json['images'][0]['href'] ?? ""
+          : '',
+      level: (json['levels'] != null && json['levels'].isNotEmpty)
+          ? json['levels'][0]['level'] ?? ""
+          : '',
+      types: (json['types'] != null && json['types'].isNotEmpty)
+          ? json['types'][0]['type'] ?? ""
+          : '',
+      attrib: (json['attributes'] != null)
+          ? List<String>.from(
+              json['attributes'].map((a) => a['attribute'] ?? ""),
+            )
+          : [],
+      descrip: (json['attributes'] != null)
+          ? List<String>.from(
+              json['descriptions'].map((a) => a['description'] ?? ""),
+            )
+          : [],
+    );
+  }
+}
+
+//App Principal
+class DigimonApp extends StatelessWidget {
+  @override
+  Widget build(BuildContext context) {
+    return MaterialApp(
+      title: 'DIGI API',
+      debugShowCheckedModeBanner: false,
+      theme: ThemeData(colorSchemeSeed: Colors.deepPurple, useMaterial3: true),
+      home: PageDigimon(),
+    );
+  }
+}
+
+class PageDigimon extends StatefulWidget {
+  @override
+  State<StatefulWidget> createState() => _PageDigimonState();
+}
+
+//Widget Principal
+class _PageDigimonState extends State<PageDigimon> {
+  List<Digimon> digimons = [];
+  List<Digimon> filtered = [];
+  bool loading = false;
+  bool loadingMore = false;
+  int currentPage = 0;
+  final int pageSize = 10;
+
+  final ScrollController scrollController = ScrollController();
+  final TextEditingController searchController = TextEditingController();
+
+  void initState() {
+    super.initState();
+    fetchDigimons();
+    scrollController.addListener(onScroll);
+  }
+
+  void dispose() {
+    scrollController.dispose();
+    super.dispose();
+  }
+
+  //FETCH con detalles y paginacion
+  Future<void> fetchDigimons() async {
+    if (loading) return;
+    setState(() {
+      loading = digimons.isEmpty;
+      loadingMore = true;
+    });
+
+    try {
+      final response = await http.get(
+        Uri.parse(
+          'https://digi-api.com/api/v1/digimon?page=$currentPage&pageSize=$pageSize',
+        ),
+      );
+      if (response.statusCode == 200) {
+        final data = json.decode(response.body);
+        final List<dynamic> digimonList = data['content'];
+        List<Digimon> fetched = [];
+        for (var digimonData in digimonList) {
+          try {
+            final detailResponse = await http.get(
+              Uri.parse(
+                'https://digi-api.com/api/v1/digimon/${digimonData['id']}',
+              ),
+            );
+            if (detailResponse.statusCode == 200) {
+              final detailData = json.decode(detailResponse.body);
+              fetched.add(Digimon.fromJson(detailData));
+            }
+          } catch (e) {
+            debugPrint('Error al carga el Digimon: ${digimonData['id']}');
+          }
+        }
+        setState(() {
+          digimons.addAll(fetched);
+          filtered = digimons;
+          currentPage++;
+          loading = false;
+          loadingMore = false;
+        });
+      } else {
+        throw Exception('Error al cargar la lista');
+      }
+    } catch (e) {
+      setState(() {
+        loading = false;
+        loadingMore = false;
+      });
+
+      ScaffoldMessenger.of(
+        context,
+      ).showSnackBar(SnackBar(content: Text('Error al cargar: $e')));
+    }
+  }
+
+  void onScroll() {
+    if (scrollController.position.pixels >=
+            scrollController.position.maxScrollExtent - 200 &&
+        !loadingMore) {
+      fetchDigimons();
+    }
+  }
+
+  void filteredDigimons(String query) {
+    setState(() {
+      if (query.isEmpty) {
+        filtered = digimons;
+      } else {
+        filtered = digimons
+            .where(
+              (d) =>
+                  d.name.toLowerCase().contains(query.toLowerCase()) ||
+                  d.level.toLowerCase().contains(query.toLowerCase()) ||
+                  d.types.toLowerCase().contains(query.toLowerCase()),
+            )
+            .toList();
+      }
+    });
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    // TODO: implement build
+    return Scaffold(
+      appBar: AppBar(title: Text('DIGI API')),
+      body: Column(
+        children: [
+          //Buscador
+          Padding(
+            padding: EdgeInsets.all(12),
+            child: TextField(
+              controller: searchController,
+              onChanged: filteredDigimons,
+              decoration: InputDecoration(
+                hintText: "Buscar Digimons",
+                prefixIcon: Icon(Icons.search),
+                border: OutlineInputBorder(
+                  borderRadius: BorderRadius.circular(20),
+                ),
+              ),
+            ),
+          ),
+          //Tarjetero
+          Expanded(
+            child: loading
+                ? Center(child: CircularProgressIndicator())
+                : GridView.builder(
+                    gridDelegate: SliverGridDelegateWithFixedCrossAxisCount(
+                      crossAxisCount: 3,
+                      childAspectRatio: 0.75,
+                    ),
+                    itemCount: filtered.length + (loadingMore ? 1 : 0),
+                    itemBuilder: (context, index) {
+                      if (index == filtered.length && loadingMore) {
+                        return Center(child: CircularProgressIndicator());
+                      }
+                      return DigimonCard(digimon: filtered[index]);
+                    },
+                  ),
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+//Tarjeta Animada
+class DigimonCard extends StatefulWidget {
+  final Digimon digimon;
+  const DigimonCard({super.key, required this.digimon});
+  @override
+  State<DigimonCard> createState() => _DigimonCardState();
+}
+
+class _DigimonCardState extends State<DigimonCard>
+    with SingleTickerProviderStateMixin {
+  late AnimationController
+  controller; //late es una inicializacion tardia de la variable
+  late Animation<double>
+  scaleAnimation; //Establecemos la variable Animation para animar y el parametro con el que queremos animar
+  late Animation<Offset> slideAnimation;
+  @override
+  void initState() {
+    super.initState();
+    controller = AnimationController(
+      duration: Duration(milliseconds: 500),
+      vsync:
+          this, //Esta es la sincronizacion de la animacion y definimos directamente del Widget como un this
+    );
+
+    scaleAnimation = Tween<double>(
+      begin: 0.8,
+      end: 1.0,
+    ).animate(CurvedAnimation(parent: controller, curve: Curves.easeInOut));
+
+    slideAnimation = Tween<Offset>(begin: Offset(1.0, 0), end: Offset.zero)
+        .animate(
+          CurvedAnimation(parent: controller, curve: Curves.easeInOutCubic),
+        );
+    controller.forward();
+  }
+
+  @override
+  void dispose() {
+    controller.dispose();
+    super.dispose();
+  }
+
+  Widget build(BuildContext context) {
+    final d = widget.digimon;
+
+    return SlideTransition(
+      position: slideAnimation,
+      child: ScaleTransition(
+        scale: scaleAnimation,
+        child: Padding(
+          padding: EdgeInsets.all(10),
+          child: Column(
+            children: [
+              //Imagen del Digimon
+              Expanded(
+                child: Image.network(
+                  d.image,
+                  fit: BoxFit.contain,
+                  errorBuilder: (_, __, ___) => const Icon(
+                    Icons.catching_pokemon,
+                    size: 60,
+                    color: Colors.grey,
+                  ),
+                ),
+              ),
+              const SizedBox(height: 8),
+              //Datos del Digimon
+              /*===============*/
+              //Nombre del Digimon
+              Text(
+                d.name,
+                textAlign: TextAlign.center,
+                style: TextStyle(
+                  fontSize: 18,
+                  fontWeight: FontWeight.bold,
+                  color: Colors.deepPurple,
+                ),
+              ),
+              const SizedBox(height: 4),
+
+              //Datos Generales
+              if (d.level.isNotEmpty) Text('Nivel: ${d.level}'),
+              if (d.types.isNotEmpty) Text('Tipo: ${d.types}'),
+              if (d.attrib.isNotEmpty)
+                Text("Atributos: ${d.attrib.join(", ")}"),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+}
