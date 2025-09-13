@@ -1,0 +1,856 @@
+import 'dart:async';
+import 'dart:convert'; // ADDED
+import 'package:flutter/material.dart';
+import 'package:provider/provider.dart';
+import 'package:http/http.dart' as http; // ADDED
+import 'package:intl/intl.dart'; // ADDED (para fecha)
+
+// =====================
+// Utilidades FX (reusa tu primer código)
+// =====================
+
+const Map<String, String> currencies = {
+  "usd": "US Dollar",
+  "eur": "Euro",
+  "btc": "Bitcoin",
+  "eth": "Ethereum",
+  "jpy": "Japanese Yen",
+  "mxn": "Mexican Peso",
+  "ars": "Argentine Peso",
+  "brl": "Brazilian Real",
+  "gbp": "British Pound",
+  "cad": "Canadian Dollar",
+  // Puedes agregar "cop", "ves" si tu API los soporta:
+  "cop": "Colombian Peso",
+  "ves": "Venezuelan Bolívar",
+};
+
+Future<Map<String, dynamic>> exchangeRates(
+  String currency,
+  DateTime date,
+) async {
+  final timeformat =
+      "${date.year.toString().padLeft(4, "0")}-${date.month.toString().padLeft(2, '0')}-${date.day.toString().padLeft(2, '0')}";
+
+  final urls = [
+    "https://cdn.jsdelivr.net/npm/@fawazahmed0/currency-api@$timeformat/v1/currencies/$currency.json",
+    "https://$timeformat.currency-api.pages.dev/v1/currencies/$currency.json",
+  ];
+
+  for (var url in urls) {
+    try {
+      final response = await http.get(Uri.parse(url));
+      if (response.statusCode == 200) {
+        final decodedBody = json.decode(response.body);
+        if (decodedBody != null && decodedBody.containsKey(currency)) {
+          return decodedBody[currency] as Map<String, dynamic>;
+        }
+      }
+    } catch (e) {
+      debugPrint("Error fetching currency from $url: $e");
+    }
+  }
+
+  throw Exception("No fue posible cargar tasas para $currency en $timeformat");
+}
+
+// =====================
+// MODELOS
+// =====================
+
+class Product {
+  final int id;
+  final String name;
+  final double price; // USD base
+  Product({required this.id, required this.name, required this.price});
+
+  @override
+  int get hashCode => id.hashCode;
+  @override
+  bool operator ==(Object other) => other is Product && other.id == id;
+}
+
+class CartModel extends ChangeNotifier {
+  final List<Product> _productsInCart = <Product>[];
+
+  List<Product> get productsInCart => List.unmodifiable(_productsInCart);
+
+  // Total en USD (base)
+  double get totalUSD =>
+      _productsInCart.fold<double>(0.0, (sum, Product p) => sum + p.price);
+
+  void addProduct(Product product) {
+    _productsInCart.add(product);
+    notifyListeners();
+  }
+
+  void removeProduct(Product product) {
+    _productsInCart.remove(product);
+    notifyListeners();
+  }
+
+  void clearCart() {
+    _productsInCart.clear();
+    notifyListeners();
+  }
+}
+
+// Modelo para manejar la moneda y tasas
+class ExchangeRateModel extends ChangeNotifier {
+  // Siempre traemos tasas con base en USD para convertir USD -> target
+  final String base = "usd";
+  String _target = "usd";
+  DateTime _date = DateTime.now();
+
+  String get target => _target; // ej: "ves"
+  DateTime get date => _date;
+
+  bool _loading = false;
+  bool get loading => _loading;
+
+  Map<String, double> _rates = {};
+  Map<String, double> get rates => _rates;
+
+  // rate actual USD -> target
+  double get currentRate => (_rates[_target] ?? 1.0) * 1.0;
+
+  final TextEditingController dateContrl =
+      TextEditingController(text: DateFormat('yyyy-MM-dd').format(DateTime.now()));
+
+  ExchangeRateModel() {
+    _loadRates();
+  }
+
+  Future<void> _loadRates() async {
+    _loading = true;
+    notifyListeners();
+    try {
+      final data = await exchangeRates(base, _date);
+      // Convertir dynamic a double de forma segura
+      _rates = data.map((k, v) {
+        final dv = (v is num) ? v.toDouble() : double.tryParse("$v") ?? 0.0;
+        return MapEntry(k, dv);
+      });
+    } catch (e) {
+      debugPrint("FX error: $e");
+      _rates = {};
+    } finally {
+      _loading = false;
+      notifyListeners();
+    }
+  }
+
+  void setTarget(String t) {
+    if (t == _target) return;
+    _target = t;
+    notifyListeners();
+  }
+
+  Future<void> pickDate(BuildContext context) async {
+    DateTime? picked = await showDatePicker(
+      context: context,
+      initialDate: _date,
+      firstDate: DateTime(2000),
+      lastDate: DateTime.now(),
+    );
+    if (picked != null && picked != _date) {
+      _date = picked;
+      dateContrl.text = DateFormat('yyyy-MM-dd').format(_date);
+      await _loadRates();
+    }
+  }
+
+  Future<void> reloadToday() async {
+    _date = DateTime.now();
+    dateContrl.text = DateFormat('yyyy-MM-dd').format(_date);
+    await _loadRates();
+  }
+}
+
+// =====================
+// Lógica pagos (igual que tu código, con pequeños ajustes visuales)
+// =====================
+
+final Map<String, int> currencyDecimal = {
+  "USD": 2,
+  "EUR": 2,
+  "COP": 0,
+  "VES": 2,
+  "MXN": 2,
+  "ARS": 2,
+  "BRL": 2,
+  "GBP": 2,
+  "CAD": 2,
+  "JPY": 0,
+};
+
+int pow10(int n) {
+  int x = 1;
+  for (int i = 0; i < n; i++) {
+    x *= 10;
+  }
+  return x;
+}
+
+int toMinorUnits(double amount, String currency) {
+  final decimals = currencyDecimal[currency] ?? 2;
+  final factor = pow10(decimals);
+  return (amount * factor).round();
+}
+
+Future<bool> showDialog3DS(BuildContext context) async {
+  return await showDialog<bool>(
+        context: context,
+        builder: (ctx) => AlertDialog(
+          title: const Text("Autenticación Requerida"),
+          content: const Text(
+            "Este pago requiere una verificación 3D Secure.\nPresiona Aceptar para continuar",
+          ),
+          actions: [
+            TextButton(
+              onPressed: () => Navigator.pop(ctx, false),
+              child: const Text("Cancelar"),
+            ),
+            TextButton(
+              onPressed: () => Navigator.pop(ctx, true),
+              child: const Text("Aceptar"),
+            ),
+          ],
+        ),
+      ) ??
+      false;
+}
+
+void snack({required BuildContext context, required String msg}) {
+  ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(msg)));
+}
+
+Future<void> pay(
+  BuildContext context, {
+  required String name,
+  required String email,
+  required String cardNumber,
+  required String holder,
+}) async {
+  FocusScope.of(context).unfocus();
+
+  final cartModel = Provider.of<CartModel>(context, listen: false);
+  final fx = Provider.of<ExchangeRateModel>(context, listen: false);
+
+  if (name.isEmpty || email.isEmpty || holder.isEmpty) {
+    snack(context: context, msg: 'Rellena nombre, email y titular de tarjeta.');
+    return;
+  }
+  if (!email.contains('@') || !email.contains(".")) {
+    snack(context: context, msg: "Email inválido.");
+    return;
+  }
+  if (cardNumber.length < 16) {
+    snack(context: context, msg: "Número de tarjeta inválido");
+    return;
+  }
+  if (cartModel.totalUSD <= 0) {
+    snack(context: context, msg: "El carrito está vacío.");
+    return;
+  }
+
+  // Para simplicidad, el cobro simulado sigue en USD (puedo cambiarlo si lo deseas)
+  final amountMajorUSD = cartModel.totalUSD;
+  final amountMinorUSD = toMinorUnits(amountMajorUSD, "USD");
+
+  try {
+    debugPrint(
+      "Creando pago por $amountMajorUSD USD ($amountMinorUSD minor units)",
+    );
+
+    final server = FakeStripeServer(simulate3DS: false, simulatedError: false);
+
+    final pi = await server.createPaymentIntent(
+      currency: "USD",
+      amountMinor: amountMinorUSD,
+      metadata: {
+        'customer_name': name,
+        'customer_email': email,
+        'items': cartModel.productsInCart.map<int>((p) => p.id).join(","),
+        'display_currency': fx.target.toUpperCase(),
+        'display_rate': fx.currentRate.toStringAsFixed(6),
+      },
+    );
+
+    debugPrint("Intento de Pago Creado: ${pi["id"]}");
+
+    final confirm1 = await server.confirmPayment(
+      clientSecret: pi['client_secret'] as String,
+      paymentMethod: {"cardNumber": cardNumber, "holder": holder},
+    );
+
+    if (confirm1['status'] == "requires_action") {
+      final ok = await showDialog3DS(context);
+      if (!ok) {
+        snack(context: context, msg: "Usuario canceló el pago");
+        return;
+      }
+      final confirm2 = await server.confirmPayment(
+        clientSecret: pi["client_secret"] as String,
+        paymentMethod: {
+          "cardNumber": cardNumber,
+          "holder": holder,
+          "threeDS": "completed",
+        },
+      );
+      if (confirm2['status'] == "completed") {
+        snack(context: context, msg: "Pago Exitoso");
+        cartModel.clearCart();
+      } else {
+        snack(context: context, msg: "Transacción Fallida");
+      }
+    } else if (confirm1['status'] == 'completed') {
+      snack(context: context, msg: "Pago Aprobado ✅");
+      cartModel.clearCart();
+    } else {
+      snack(context: context, msg: "Pago no Aprobado");
+    }
+  } catch (e) {
+    debugPrint("Error: $e");
+    snack(context: context, msg: "Error al procesar el pago");
+  }
+}
+
+// =====================
+// UI
+// =====================
+
+class MyApp extends StatelessWidget {
+  @override
+  Widget build(BuildContext context) {
+    return MultiProvider(
+      providers: [
+        ChangeNotifierProvider<CartModel>(create: (_) => CartModel()),
+        ChangeNotifierProvider<ExchangeRateModel>(
+          create: (_) => ExchangeRateModel(),
+        ),
+      ],
+      builder: (context, child) => MaterialApp(
+        debugShowCheckedModeBanner: false,
+        title: "Simulación de Stripe",
+        theme: ThemeData(useMaterial3: true, colorSchemeSeed: Colors.indigo),
+        home: CheckOutPage(),
+      ),
+    );
+  }
+}
+
+class CheckOutPage extends StatefulWidget {
+  @override
+  State<CheckOutPage> createState() => _CheckOutPageState();
+}
+
+class _CheckOutPageState extends State<CheckOutPage>
+    with SingleTickerProviderStateMixin {
+  late TabController _tabController;
+
+  @override
+  void initState() {
+    super.initState();
+    _tabController = TabController(length: 3, vsync: this);
+  }
+
+  @override
+  void dispose() {
+    _tabController.dispose();
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final fx = context.watch<ExchangeRateModel>();
+    return Scaffold(
+      appBar: AppBar(
+        title: const Text("Simulación de Stripe"),
+        actions: [
+          // Dropdown de moneda + selector de fecha (FX)
+          if (fx.loading)
+            const Padding(
+              padding: EdgeInsets.symmetric(horizontal: 12),
+              child: Center(child: SizedBox(width: 20, height: 20, child: CircularProgressIndicator(strokeWidth: 2))),
+            ),
+          CurrencySelector(), // ADDED
+        ],
+        bottom: TabBar(
+          controller: _tabController,
+          tabs: const <Widget>[
+            Tab(text: "Productos", icon: Icon(Icons.shopping_bag)),
+            Tab(text: "Carrito", icon: Icon(Icons.shopping_cart)),
+            Tab(text: "Pago", icon: Icon(Icons.payment)),
+          ],
+        ),
+      ),
+      body: TabBarView(
+        controller: _tabController,
+        children: <Widget>[
+          ProductCatalogView(),
+          ShoppingCartView(),
+          PaymentFormView(),
+        ],
+      ),
+    );
+  }
+}
+
+// =====================
+// Widgets Reutilizables
+// =====================
+
+class CurrencySelector extends StatelessWidget {
+  @override
+  Widget build(BuildContext context) {
+    final fx = context.watch<ExchangeRateModel>();
+    final target = fx.target;
+    return Row(
+      children: [
+        // Fecha
+        SizedBox(
+          width: 126,
+          child: Padding(
+            padding: const EdgeInsets.symmetric(vertical: 8.0),
+            child: TextField(
+              controller: fx.dateContrl,
+              readOnly: true,
+              decoration: const InputDecoration(
+                isDense: true,
+                labelText: "Fecha FX",
+                border: OutlineInputBorder(),
+              ),
+              onTap: () => fx.pickDate(context),
+            ),
+          ),
+        ),
+        IconButton(
+          tooltip: "Hoy",
+          onPressed: fx.loading ? null : fx.reloadToday,
+          icon: const Icon(Icons.today),
+        ),
+        const SizedBox(width: 8),
+        // Dropdown
+        DropdownButtonHideUnderline(
+          child: DropdownButton<String>(
+            value: target,
+            items: currencies.entries
+                .map(
+                  (e) => DropdownMenuItem<String>(
+                    value: e.key,
+                    child: Text("${e.value} (${e.key.toUpperCase()})"),
+                  ),
+                )
+                .toList(),
+            onChanged: (val) {
+              if (val != null) {
+                context.read<ExchangeRateModel>().setTarget(val);
+              }
+            },
+          ),
+        ),
+        const SizedBox(width: 12),
+      ],
+    );
+  }
+}
+
+// Datos de ejemplo
+final List<Product> catalog = <Product>[
+  Product(id: 1, name: "In Ears", price: 9.25),
+  Product(id: 2, name: "Smartwatch", price: 129.99),
+  Product(id: 3, name: "Wireless Keyboard", price: 75.50),
+  Product(id: 4, name: "Gaming Mouse", price: 49.99),
+  Product(id: 5, name: "USB-C Hub", price: 34.00),
+  Product(id: 6, name: "External SSD 1TB", price: 110.00),
+  Product(id: 7, name: "Bluetooth Speaker", price: 59.95),
+  Product(id: 8, name: "Noise Cancelling Headphones", price: 199.99),
+  Product(id: 9, name: "Webcam Full HD", price: 65.20),
+  Product(id: 10, name: "Monitor 27-inch", price: 299.00),
+  Product(id: 11, name: "Ergonomic Chair", price: 350.75),
+  Product(id: 12, name: "Laptop Stand", price: 25.00),
+  Product(id: 13, name: "Portable Charger", price: 39.99),
+  Product(id: 14, name: "Travel Backpack", price: 89.90),
+  Product(id: 15, name: "Tablet Stylus", price: 15.00),
+  Product(id: 16, name: "Digital Drawing Tablet", price: 180.00),
+  Product(id: 17, name: "Mini Projector", price: 220.50),
+  Product(id: 18, name: "Smart Plug", price: 19.99),
+  Product(id: 19, name: "Robot Vacuum", price: 289.00),
+  Product(id: 20, name: "Air Purifier", price: 150.00),
+  Product(id: 21, name: "Electric Kettle", price: 45.00),
+  Product(id: 22, name: "Coffee Maker", price: 99.99),
+  Product(id: 23, name: "Blender", price: 70.00),
+  Product(id: 24, name: "Smart Scale", price: 40.00),
+  Product(id: 25, name: "Fitness Tracker", price: 60.00),
+  Product(id: 26, name: "Instant Camera", price: 85.00),
+];
+
+String _fmt(double amount, String currencyCode) {
+  // Ajusta decimales por moneda
+  final dec = currencyDecimal[currencyCode] ?? 2;
+  return amount.toStringAsFixed(dec);
+}
+
+class ProductCatalogView extends StatelessWidget {
+  @override
+  Widget build(BuildContext context) {
+    final fx = context.watch<ExchangeRateModel>();
+    final tgt = fx.target.toUpperCase();
+    final r = fx.currentRate;
+
+    return Column(
+      children: <Widget>[
+        Padding(
+          padding: const EdgeInsets.all(16.0),
+          child: Text(
+            "Selecciona productos (USD base) • Mostrando equivalentes en $tgt",
+            style: Theme.of(context).textTheme.titleLarge,
+          ),
+        ),
+        if (fx.loading && fx.rates.isEmpty)
+          const Padding(
+            padding: EdgeInsets.all(16.0),
+            child: LinearProgressIndicator(),
+          ),
+        Expanded(
+          child: ListView.builder(
+            itemCount: catalog.length,
+            itemBuilder: (context, index) {
+              final product = catalog[index];
+              final converted = product.price * r;
+
+              return Card(
+                margin: const EdgeInsets.symmetric(
+                  horizontal: 16.0,
+                  vertical: 8.0,
+                ),
+                child: ListTile(
+                  title: Text(product.name),
+                  subtitle: Text(
+                    "USD \$${product.price.toStringAsFixed(2)}  •  "
+                    "$tgt ${_fmt(converted, tgt)}",
+                  ),
+                  trailing: IconButton(
+                    icon: const Icon(Icons.add_shopping_cart),
+                    onPressed: () {
+                      context.read<CartModel>().addProduct(product);
+                      snack(
+                        context: context,
+                        msg: "${product.name} añadido al carrito!",
+                      );
+                    },
+                  ),
+                ),
+              );
+            },
+          ),
+        ),
+      ],
+    );
+  }
+}
+
+class ShoppingCartView extends StatelessWidget {
+  @override
+  Widget build(BuildContext context) {
+    final fx = context.watch<ExchangeRateModel>();
+    final tgt = fx.target.toUpperCase();
+    final r = fx.currentRate;
+
+    return Consumer<CartModel>(
+      builder: (context, cart, child) {
+        if (cart.productsInCart.isEmpty) {
+          return Center(
+            child: Column(
+              mainAxisAlignment: MainAxisAlignment.center,
+              children: <Widget>[
+                const Icon(
+                  Icons.shopping_cart_outlined,
+                  size: 80,
+                  color: Colors.grey,
+                ),
+                const SizedBox(height: 16),
+                Text(
+                  "Tu carrito está vacío",
+                  style: Theme.of(context).textTheme.headlineSmall,
+                ),
+              ],
+            ),
+          );
+        }
+
+        final totalUSD = cart.totalUSD;
+        final totalTGT = totalUSD * r;
+
+        return Column(
+          children: <Widget>[
+            Padding(
+              padding: const EdgeInsets.all(16.0),
+              child: Text(
+                "Total: USD \$${totalUSD.toStringAsFixed(2)}  •  "
+                "$tgt ${_fmt(totalTGT, tgt)}",
+                style: Theme.of(context).textTheme.headlineSmall,
+              ),
+            ),
+            Expanded(
+              child: ListView.builder(
+                itemCount: cart.productsInCart.length,
+                itemBuilder: (context, index) {
+                  final product = cart.productsInCart[index];
+                  final converted = product.price * r;
+
+                  return Card(
+                    margin: const EdgeInsets.symmetric(
+                      horizontal: 16.0,
+                      vertical: 8.0,
+                    ),
+                    child: ListTile(
+                      title: Text(product.name),
+                      subtitle: Text(
+                        "USD \$${product.price.toStringAsFixed(2)}  •  "
+                        "$tgt ${_fmt(converted, tgt)}",
+                      ),
+                      trailing: IconButton(
+                        icon: const Icon(
+                          Icons.remove_shopping_cart,
+                          color: Colors.red,
+                        ),
+                        onPressed: () {
+                          cart.removeProduct(product);
+                          snack(
+                            context: context,
+                            msg: "${product.name} eliminado del carrito.",
+                          );
+                        },
+                      ),
+                    ),
+                  );
+                },
+              ),
+            ),
+            Padding(
+              padding: const EdgeInsets.all(16.0),
+              child: ElevatedButton.icon(
+                onPressed: () {
+                  cart.clearCart();
+                  snack(context: context, msg: "Carrito vaciado.");
+                },
+                icon: const Icon(Icons.clear_all),
+                label: const Text("Vaciar Carrito"),
+                style: ElevatedButton.styleFrom(
+                  minimumSize: const Size.fromHeight(50),
+                ),
+              ),
+            ),
+          ],
+        );
+      },
+    );
+  }
+}
+
+class PaymentFormView extends StatefulWidget {
+  @override
+  State<PaymentFormView> createState() => _PaymentFormViewState();
+}
+
+class _PaymentFormViewState extends State<PaymentFormView> {
+  final _formKey = GlobalKey<FormState>();
+  final TextEditingController _nameController =
+      TextEditingController(text: "Jane Doe");
+  final TextEditingController _emailController =
+      TextEditingController(text: "jane.doe@example.com");
+  final TextEditingController _cardNumberController =
+      TextEditingController(text: "4242424242424242");
+  final TextEditingController _holderController =
+      TextEditingController(text: "Jane A. Doe");
+
+  @override
+  void dispose() {
+    _nameController.dispose();
+    _emailController.dispose();
+    _cardNumberController.dispose();
+    _holderController.dispose();
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final cart = context.watch<CartModel>();
+    final fx = context.watch<ExchangeRateModel>();
+    final tgt = fx.target.toUpperCase();
+    final r = fx.currentRate;
+
+    final totalUSD = cart.totalUSD;
+    final totalTGT = totalUSD * r;
+
+    return SingleChildScrollView(
+      padding: const EdgeInsets.all(16.0),
+      child: Form(
+        key: _formKey,
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.stretch,
+          children: <Widget>[
+            Text(
+              "Detalles de Pago",
+              style: Theme.of(context).textTheme.headlineSmall,
+            ),
+            const SizedBox(height: 8),
+            Text(
+              "Total a pagar (visual): USD \$${totalUSD.toStringAsFixed(2)}  •  "
+              "$tgt ${_fmt(totalTGT, tgt)}",
+              style: Theme.of(context).textTheme.bodyMedium,
+            ),
+            const SizedBox(height: 24),
+            TextFormField(
+              controller: _nameController,
+              decoration: const InputDecoration(
+                labelText: "Nombre Completo",
+                border: OutlineInputBorder(),
+                prefixIcon: Icon(Icons.person),
+              ),
+              validator: (value) =>
+                  (value == null || value.isEmpty) ? "Ingresa tu nombre" : null,
+            ),
+            const SizedBox(height: 16),
+            TextFormField(
+              controller: _emailController,
+              keyboardType: TextInputType.emailAddress,
+              decoration: const InputDecoration(
+                labelText: "Correo Electrónico",
+                border: OutlineInputBorder(),
+                prefixIcon: Icon(Icons.email),
+              ),
+              validator: (value) {
+                if (value == null || value.isEmpty) return "Ingresa tu correo";
+                if (!value.contains('@') || !value.contains(".")) {
+                  return "Correo electrónico inválido";
+                }
+                return null;
+              },
+            ),
+            const SizedBox(height: 16),
+            TextFormField(
+              controller: _cardNumberController,
+              keyboardType: TextInputType.number,
+              decoration: const InputDecoration(
+                labelText: "Número de Tarjeta",
+                border: OutlineInputBorder(),
+                prefixIcon: Icon(Icons.credit_card),
+              ),
+              maxLength: 16,
+              validator: (value) {
+                if (value == null || value.isEmpty) {
+                  return "Ingresa el número de tarjeta";
+                }
+                if (value.length != 16 || int.tryParse(value) == null) {
+                  return "Número de tarjeta inválido (16 dígitos)";
+                }
+                return null;
+              },
+            ),
+            const SizedBox(height: 16),
+            TextFormField(
+              controller: _holderController,
+              decoration: const InputDecoration(
+                labelText: "Titular de la Tarjeta",
+                border: OutlineInputBorder(),
+                prefixIcon: Icon(Icons.badge),
+              ),
+              validator: (value) =>
+                  (value == null || value.isEmpty) ? "Ingresa el titular" : null,
+            ),
+            const SizedBox(height: 32),
+            ElevatedButton.icon(
+              onPressed: cart.totalUSD > 0
+                  ? () {
+                      if (_formKey.currentState!.validate()) {
+                        pay(
+                          context,
+                          name: _nameController.text,
+                          email: _emailController.text,
+                          cardNumber: _cardNumberController.text,
+                          holder: _holderController.text,
+                        );
+                      }
+                    }
+                  : null,
+              icon: const Icon(Icons.payment),
+              label: Text(
+                "Pagar Ahora (USD \$${totalUSD.toStringAsFixed(2)} • "
+                "$tgt ${_fmt(totalTGT, tgt)})",
+              ),
+              style: ElevatedButton.styleFrom(
+                padding: const EdgeInsets.symmetric(vertical: 16),
+                textStyle: const TextStyle(fontSize: 18),
+              ),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+}
+
+// =====================
+// Servidor Stripe simulado (igual)
+// =====================
+
+final bool simulationServerError = false;
+final List<String> logs = [];
+final bool isPlaying = false;
+
+class FakeStripeServer {
+  final bool simulatedError;
+  final bool simulate3DS;
+
+  FakeStripeServer({this.simulate3DS = false, this.simulatedError = false});
+
+  Future<Map<String, dynamic>> createPaymentIntent({
+    required int amountMinor,
+    required String currency,
+    Map<String, String>? metadata,
+  }) async {
+    await Future.delayed(const Duration(milliseconds: 500));
+    if (simulatedError) {
+      throw Exception("500 Internal Server Error (simulado)");
+    }
+    if (amountMinor <= 0) {
+      throw Exception("Monto inválido");
+    }
+
+    return {
+      "id": 12547378934,
+      "client_secret": "sakdjaskldñlAJSDÑLAKSJD21343534",
+      "amount": amountMinor,
+      "currency": currency,
+      "metadata": metadata ?? {},
+      "status": "required_confirmation",
+    };
+  }
+
+  Future<Map<String, dynamic>> confirmPayment({
+    required String clientSecret,
+    required Map<String, dynamic> paymentMethod,
+  }) async {
+    await Future.delayed(const Duration(milliseconds: 700));
+
+    if (simulatedError) {
+      return {"status": "failed", "error": "Card declined"};
+    }
+
+    if (simulate3DS && paymentMethod["threeDS"] != "completed") {
+      return {"status": "requires_action", "action": "secure_challenge"};
+    }
+
+    return {
+      "status": "completed",
+      "charged": [
+        {"id": 2345, "paid": true},
+      ],
+    };
+  }
+}
+
+void main() => runApp(MyApp());
